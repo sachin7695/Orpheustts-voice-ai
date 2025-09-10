@@ -49,13 +49,13 @@ Baseten is our [preferred inference partner](https://www.baseten.co/blog/canopy-
 
 1. Clone this repo
    ```bash
-   git clone https://github.com/canopyai/Orpheus-TTS.git
+   git clone https://github.com/sachin7695/Orpheustts-voice-ai.git
    ```
 2. Navigate and install packages
    ```bash
-   cd Orpheus-TTS && pip install orpheus-speech # uses vllm under the hood for fast inference
+   cd /Orpheustts-voice-ai/orpheus_tts_pypi/orpheus_tts && pip install -e . # uses vllm under the hood for fast inference
    ```
-   vllm pushed a slightly buggy version on March 18th so some bugs are being resolved by reverting to `pip install vllm==0.7.3` after `pip install orpheus-speech`
+   vllm pushed a slightly buggy version on March 18th so some bugs are being resolved by reverting to `pip install vllm==0.7.3` after `pip install -e .`
 4. Run the example below:
    ```python
    from orpheus_tts import OrpheusModel
@@ -66,7 +66,7 @@ Baseten is our [preferred inference partner](https://www.baseten.co/blog/canopy-
    prompt = '''Man, the way social media has, um, completely changed how we interact is just wild, right? Like, we're all connected 24/7 but somehow people feel more alone than ever. And don't even get me started on how it's messing with kids' self-esteem and mental health and whatnot.'''
 
    start_time = time.monotonic()
-   syn_tokens = model.generate_speech(
+   syn_tokens = model.generate_speech_audio(
       prompt=prompt,
       voice="tara",
       )

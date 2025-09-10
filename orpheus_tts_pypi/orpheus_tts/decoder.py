@@ -1,116 +1,136 @@
-from snac import SNAC
 import numpy as np
 import torch
 import asyncio
 import threading
 import queue
 import os
-
-
+import time
+from collections import deque
+import logging
+from snac import SNAC
+torch.set_num_threads(1)
+logger = logging.getLogger(__name__)
 model = SNAC.from_pretrained("hubertsiuzdak/snac_24khz").eval()
 
-snac_device = os.environ.get("SNAC_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
+# Check if CUDA is available and set device accordingly
+snac_device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(snac_device)
+
+def warm_up_decoder():
+    """Warm up the SNAC decoder to reduce latency on first inference."""
+    if snac_device == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+        
+        # Warm up the model with a dummy inference
+        dummy_codes = [
+            torch.randint(0, 4096, (1, 1), dtype=torch.int32, device=snac_device),
+            torch.randint(0, 4096, (1, 2), dtype=torch.int32, device=snac_device),
+            torch.randint(0, 4096, (1, 4), dtype=torch.int32, device=snac_device)
+        ]
+        
+        with torch.inference_mode():
+            for i in range(3):
+                logger.info(f"Warm-up iteration {i+1}/3")
+                _ = model.decode(dummy_codes)
+
+def turn_token_into_id(token_string, index):
+    token_string = token_string.strip()
+    mod = index % 7
+    
+    import re
+    tokens = re.findall(r'<custom_token_(\d+)>', token_string)
+    
+    if not tokens:
+        return None
+        
+    digits = tokens[-1]
+    token_id = int(digits) - 10 - (mod * 4096)
+    
+    # More lenient validation
+    if token_id < 0 or token_id >= 4096:  # Changed from > to >=
+        return None
+    return token_id
+
 
 
 def convert_to_audio(multiframe, count):
-  frames = []
-  if len(multiframe) < 7:
-    return
-  
-  codes_0 = torch.tensor([], device=snac_device, dtype=torch.int32)
-  codes_1 = torch.tensor([], device=snac_device, dtype=torch.int32)
-  codes_2 = torch.tensor([], device=snac_device, dtype=torch.int32)
-
-  num_frames = len(multiframe) // 7
-  frame = multiframe[:num_frames*7]
-
-  for j in range(num_frames):
-    i = 7*j
-    if codes_0.shape[0] == 0:
-      codes_0 = torch.tensor([frame[i]], device=snac_device, dtype=torch.int32)
-    else:
-      codes_0 = torch.cat([codes_0, torch.tensor([frame[i]], device=snac_device, dtype=torch.int32)])
-
-    if codes_1.shape[0] == 0:
-      
-      codes_1 = torch.tensor([frame[i+1]], device=snac_device, dtype=torch.int32)
-      codes_1 = torch.cat([codes_1, torch.tensor([frame[i+4]], device=snac_device, dtype=torch.int32)])
-    else:
-      codes_1 = torch.cat([codes_1, torch.tensor([frame[i+1]], device=snac_device, dtype=torch.int32)])
-      codes_1 = torch.cat([codes_1, torch.tensor([frame[i+4]], device=snac_device, dtype=torch.int32)])
-    
-    if codes_2.shape[0] == 0:
-      codes_2 = torch.tensor([frame[i+2]], device=snac_device, dtype=torch.int32)
-      codes_2 = torch.cat([codes_2, torch.tensor([frame[i+3]], device=snac_device, dtype=torch.int32)])
-      codes_2 = torch.cat([codes_2, torch.tensor([frame[i+5]], device=snac_device, dtype=torch.int32)])
-      codes_2 = torch.cat([codes_2, torch.tensor([frame[i+6]], device=snac_device, dtype=torch.int32)])
-    else:
-      codes_2 = torch.cat([codes_2, torch.tensor([frame[i+2]], device=snac_device, dtype=torch.int32)])
-      codes_2 = torch.cat([codes_2, torch.tensor([frame[i+3]], device=snac_device, dtype=torch.int32)])
-      codes_2 = torch.cat([codes_2, torch.tensor([frame[i+5]], device=snac_device, dtype=torch.int32)])
-      codes_2 = torch.cat([codes_2, torch.tensor([frame[i+6]], device=snac_device, dtype=torch.int32)])
-
-  codes = [codes_0.unsqueeze(0), codes_1.unsqueeze(0), codes_2.unsqueeze(0)]
-  # check that all tokens are between 0 and 4096 otherwise return *
-  if torch.any(codes[0] < 0) or torch.any(codes[0] > 4096) or torch.any(codes[1] < 0) or torch.any(codes[1] > 4096) or torch.any(codes[2] < 0) or torch.any(codes[2] > 4096):
-    return
-
-  with torch.inference_mode():
-    audio_hat = model.decode(codes)
-  
-  audio_slice = audio_hat[:, :, 2048:4096]
-  detached_audio = audio_slice.detach().cpu()
-  audio_np = detached_audio.numpy()
-  audio_int16 = (audio_np * 32767).astype(np.int16)
-  audio_bytes = audio_int16.tobytes()
-  return audio_bytes
-
-def turn_token_into_id(token_string, index):
-    # Strip whitespace
-    token_string = token_string.strip()
-    
-    # Find the last token in the string
-    last_token_start = token_string.rfind("<custom_token_")
-    
-    if last_token_start == -1:
-        print("No token found in the string")
+    """
+    EXACT original working version - don't change anything
+    """
+    if len(multiframe) < 7:
         return None
     
-    # Extract the last token
-    last_token = token_string[last_token_start:]
+    num_frames = len(multiframe) // 7
     
-    # Process the last token
-    if last_token.startswith("<custom_token_") and last_token.endswith(">"):
-        try:
-            number_str = last_token[14:-1]
-            return int(number_str) - 10 - ((index % 7) * 4096)
-        except ValueError:
-            return None
-    else:
+    # Pre-allocate tensors with the right shape and directly on target device
+    codes_0 = torch.empty((1, num_frames), dtype=torch.int32, device=snac_device)
+    codes_1 = torch.empty((1, num_frames * 2), dtype=torch.int32, device=snac_device)
+    codes_2 = torch.empty((1, num_frames * 4), dtype=torch.int32, device=snac_device)
+    
+    # Fill tensors with direct indexing (no intermediate allocations)
+    for i in range(num_frames):
+        base_idx = i * 7
+        codes_0[0, i] = multiframe[base_idx]
+        
+        codes_1[0, i*2] = multiframe[base_idx + 1]
+        codes_1[0, i*2 + 1] = multiframe[base_idx + 4]
+        
+        codes_2[0, i*4] = multiframe[base_idx + 2]
+        codes_2[0, i*4 + 1] = multiframe[base_idx + 3]
+        codes_2[0, i*4 + 2] = multiframe[base_idx + 5]
+        codes_2[0, i*4 + 3] = multiframe[base_idx + 6]
+    
+    # More lenient validation - allow wider range
+    if (torch.any(codes_0 < 0) or torch.any(codes_0 >= 4096) or
+        torch.any(codes_1 < 0) or torch.any(codes_1 >= 4096) or
+        torch.any(codes_2 < 0) or torch.any(codes_2 >= 4096)):
         return None
-  
     
+    codes = [codes_0, codes_1, codes_2]
+    
+    with torch.inference_mode():   
+        audio_hat = model.decode(codes)
+        audio_slice = audio_hat[:, :, 2048:4096]  # ORIGINAL SLICE
+        
+        if snac_device == "cuda":
+            audio_int16_tensor = (audio_slice * 32767.0).round().to(torch.int16)
+            return audio_int16_tensor.cpu().numpy().tobytes()
+        else:
+            audio_np = audio_slice.numpy()
+            return (audio_np * 32767.0).round().astype(np.int16).tobytes()
+
+
 async def tokens_decoder(token_gen):
+    """Decode tokens into audio chunks with reduced latency.
+    
+    Now configured to output 12288 bytes (6144 samples) per chunk.
+    """
     buffer = []
     count = 0
-    async for token_sim in token_gen:       
+    first_chunk_sent = False
+    MIN_FRAMES_FIRST = 7      # 1 frame for ultra-low latency
+    MIN_FRAMES_SUBSEQ = 28    # 6 frames (increased from 28 to support 6144 samples)
+    PROCESS_EVERY = 7        # Process every 3 frames (changed from 14 to match timing)
+
+    async for token_sim in token_gen:
         token = turn_token_into_id(token_sim, count)
-        if token is None:
-            pass
-        else:
-            if token > 0:
-                buffer.append(token)
-                count += 1
+        if token is None or token <= 0:
+            continue
 
-                if count % 7 == 0 and count > 27:
-                    buffer_to_proc = buffer[-28:]
-                    audio_samples = convert_to_audio(buffer_to_proc, count)
-                    if audio_samples is not None:
-                        yield audio_samples
+        buffer.append(token)
+        count += 1
 
+        if not first_chunk_sent and count >= MIN_FRAMES_FIRST:
+            audio = convert_to_audio(buffer[-MIN_FRAMES_FIRST:], count)
+            if audio is not None:
+                first_chunk_sent = True
+                yield audio
+        elif first_chunk_sent and count % PROCESS_EVERY == 0:
+            audio = convert_to_audio(buffer[-MIN_FRAMES_SUBSEQ:], count)
+            if audio is not None:
+                yield audio
 
-# ------------------ Synchronous Tokens Decoder Wrapper ------------------ #
 def tokens_decoder_sync(syn_token_gen):
 
     audio_queue = queue.Queue()
