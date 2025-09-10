@@ -45,6 +45,7 @@ We offer a standardised prompt format across languages, and these notebooks illu
 
 Baseten is our [preferred inference partner](https://www.baseten.co/blog/canopy-labs-selects-baseten-as-preferred-inference-provider-for-orpheus-tts-model) for Orpheus. Get a dedicated deployment with real-time streaming on production-grade infrastructure [in one click on Baseten](https://www.baseten.co/library/orpheus-tts/).
 
+
 #### Streaming Inference Example
 
 1. Clone this repo
@@ -90,6 +91,12 @@ Baseten is our [preferred inference partner](https://www.baseten.co/blog/canopy-
    ```
 
 
+### Voice cloning setup 
+```bash
+   cd /Orpheustts-voice-ai/voice_clone
+   in the main function of clone.py script we can set our reference_text, reference_audio, target_text
+   python clone.py
+```
 
 #### Additional Functionality
 
