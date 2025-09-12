@@ -132,7 +132,7 @@ for audio_path, transcript in reference_pairs:
    # Save cloned audio
    voice_cloner.save_audio(cloned_audio, output_paths)
 
-``
+```
 
 #### Additional Functionality
 
