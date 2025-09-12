@@ -98,6 +98,42 @@ Baseten is our [preferred inference partner](https://www.baseten.co/blog/canopy-
    python clone.py
 ```
 
+5. Run the example for voice cloning
+ ```python
+
+# check voice_clone/clone.py script 
+from voice_clone import OrpheusTTSVoiceClone
+from pathlib import Path
+
+voice_cloner = OrpheusTTSVoiceClone(model_name = "SachinTelecmi/Orpheus-tts-hi",device="cuda")
+    
+# Text to synthesize
+target_texts = [
+   "Hi IIT madras is currently doing great for indian research and its proud to be associated with it."
+]
+
+reference_pairs = [(".voice_clone/input_reference.wav", 
+                  "Delhi की एक retail chain ने हमारे solutions से अपनी sales में 30% तक वृद्धि देखी है। <hmm..> उनका feedback बहुत encouraging रहा है ।")]
+# Process each reference
+for audio_path, transcript in reference_pairs:
+   print(f"Processing reference: {audio_path} - {transcript}")
+   
+   # Clone voice
+   cloned_audio = voice_cloner.clone_voice(audio_path, transcript, target_texts)
+   
+   # Prepare output paths
+   audio_stem = Path(audio_path).stem
+   output_dir = Path(audio_path).parent / "inference"
+   output_paths = [
+      str(output_dir / f"{audio_stem}_{i}.wav") 
+      for i in range(len(target_texts))
+   ]
+   
+   # Save cloned audio
+   voice_cloner.save_audio(cloned_audio, output_paths)
+
+``
+
 #### Additional Functionality
 
 1. Watermark your audio: Use Silent Cipher to watermark your audio generation; see [Watermark Audio Implementation](additional_inference_options/watermark_audio) for implementation.
